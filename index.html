@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Detailed Mario Adventure</title>
+    <style>
+        body {
+            margin: 0; padding: 0;
+            background-color: #000; color: #fff;
+            font-family: 'Arial Black', Impact, sans-serif;
+            overflow: hidden; display: flex;
+            justify-content: center; align-items: center;
+            height: 100vh; touch-action: none;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative; width: 100%; max-width: 1024px;
+            aspect-ratio: 16 / 9; overflow: hidden;
+            background-color: #5C94FC; /* 마리오 클래식 하늘색 */
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
+            border-radius: 12px;
+        }
+
+        canvas { display: block; width: 100%; height: 100%; }
+
+        #ui-layer {
+            position: absolute; top: 20px; left: 20px; right: 20px;
+            display: flex; justify-content: space-between;
+            pointer-events: none; font-size: 24px; font-weight: bold;
+            text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 0px 4px 4px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+        
+        #instructions {
+            position: absolute; bottom: 15px; left: 0; right: 0;
+            text-align: center; font-size: 16px; color: rgba(255, 255, 255, 0.9);
+            text-shadow: 1px 1px 2px #000; pointer-events: none; z-index: 10;
+        }
+
+        .cooldown-bar {
+            width: 160px; height: 14px; background: rgba(0,0,0,0.6);
+            border: 3px solid #fff; border-radius: 8px; margin-top: 8px;
+            overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        
+        #cd-fill {
+            height: 100%; background: linear-gradient(90deg, #00FF00, #32CD32); width: 100%;
+            transition: background 0.2s, width 0.1s;
+        }
+
+        #game-over-screen {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.75); display: none;
+            flex-direction: column; justify-content: center; align-items: center;
+            z-index: 20; backdrop-filter: blur(4px);
+        }
+
+        .btn-restart {
+            margin-top: 30px; padding: 15px 40px;
+            font-size: 24px; font-family: inherit; font-weight: bold;
+            background: linear-gradient(to bottom, #FF4B4B, #E52521); color: white;
+            border: 4px solid #fff; border-radius: 16px;
+            cursor: pointer; text-transform: uppercase;
+            box-shadow: 0 6px 0 #8B0000, 0 10px 20px rgba(0,0,0,0.5);
+            transition: transform 0.1s, box-shadow 0.1s;
+        }
+        .btn-restart:hover { filter: brightness(1.1); }
+        .btn-restart:active { 
+            transform: translateY(6px); 
+            box-shadow: 0 0 0 #8B0000, 0 4px 10px rgba(0,0,0,0.5); 
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas" width="1024" height="576"></canvas>
+        
+        <div id="ui-layer">
+            <div>
+                MARIO<br><span id="score" style="color: #FFD700;">000000</span>
+                <div style="font-size: 16px; margin-top: 8px; letter-spacing: 1px;">DOUBLE JUMP</div>
+                <div class="cooldown-bar"><div id="cd-fill"></div></div>
+            </div>
+            <div style="text-align: right;">DISTANCE<br><span id="distance">0</span> m</div>
+        </div>
+        
+        <div id="instructions">
+            ⬅️ ➡️: Move &nbsp;&nbsp;|&nbsp;&nbsp; SPACE: Jump / Double Jump &nbsp;&nbsp;|&nbsp;&nbsp; Z: Shoot Fireball
+        </div>
+
+        <div id="game-over-screen">
+            <h1 style="font-size: 64px; color: #FF4B4B; text-shadow: 4px 4px 0 #fff, 0 8px 16px rgba(0,0,0,0.8); margin:0;">GAME OVER</h1>
+            <button class="btn-restart" onclick="resetGame()">Try Again</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        const distanceEl = document.getElementById('distance');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const cdFill = document.getElementById('cd-fill');
+
+        const GAME_WIDTH = 1024;
+        const GAME_HEIGHT = 576;
+        
+        // 밸런스 패치: 맵 타일 크기와 플레이어 크기 축소, 점프력 감소
+        const TILE_SIZE = 40; 
+
+        let isGameOver = false;
+        let score = 0;
+        let distance = 0;
+        let cameraX = 0;
+        let lastMapX = 0; 
+        let frameCount = 0;
+
+        const keys = { left: false, right: false, z: false };
+        let jumpPressed = false; 
+        let zPressed = false;
+
+        let player = {
+            x: 100, y: 100, w: 28, h: 42,
+            vx: 0, vy: 0, 
+            speed: 4.5, 
+            jumpPower: -11.5, // 기존 -13에서 하향 조정
+            doubleJumpPower: -9.0, // 기존 -10에서 하향 조정
+            gravity: 0.65, 
+            grounded: false, facingLeft: false, jumps: 0, cooldown: 0,
+            walkAnim: 0, state: 'idle', // idle, run, jump
+            powerup: 'normal', 
+            starTimer: 0 
+        };
+
+        let mapObjects = [];
+        let enemies = []; 
+        let items = []; 
+        let projectiles = []; 
+        let particles = [];
+        
+        // 패럴랙스 배경 요소들
+        let bgMountains = [];
+        let bgBushes = [];
+        let bgClouds = [];
+
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'ArrowLeft') keys.left = true;
+            if (e.code === 'ArrowRight') keys.right = true;
+            if (e.code === 'KeyZ') {
+                if(isGameOver) return;
+                if(!zPressed && player.powerup === 'fire') { shootFireball(); zPressed = true; }
+            }
+            if (e.code === 'Space' || e.code === 'ArrowUp') {
+                if(isGameOver) { resetGame(); return; }
+                if(!jumpPressed) {
+                    if (player.grounded) {
+                        player.vy = player.jumpPower; player.grounded = false;
+                        player.jumps = 1; jumpPressed = true; player.state = 'jump';
+                    } else if (player.jumps > 0 && player.cooldown <= 0) {
+                        player.vy = player.doubleJumpPower; player.jumps--;
+                        player.cooldown = 180; jumpPressed = true; player.state = 'jump';
+                        for(let i=0; i<10; i++) particles.push({ x: player.x+player.w/2, y: player.y+player.h, vx: (Math.random()-0.5)*4, vy: Math.random()*3, timer: 20, type: 'smoke' });
+                    }
+                }
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'ArrowLeft') keys.left = false;
+            if (e.code === 'ArrowRight') keys.right = false;
+            if (e.code === 'KeyZ') zPressed = false;
+            if (e.code === 'Space' || e.code === 'ArrowUp') jumpPressed = false;
+        });
+
+        function generateBackgrounds(startX) {
+            let endX = startX + 2500;
+            // 구름
+            for(let x = startX; x < endX; x += Math.random() * 200 + 150) {
+                bgClouds.push({ x: x, y: 30 + Math.random() * 150, scale: 0.5 + Math.random() * 0.8, speed: 0.1 + Math.random() * 0.2 });
+            }
+            // 산맥 (원경)
+            for(let x = startX; x < endX; x += Math.random() * 400 + 300) {
+                bgMountains.push({ x: x, w: 200 + Math.random() * 200, h: 100 + Math.random() * 150 });
+            }
+            // 덤불 (근경)
+            for(let x = startX; x < endX; x += Math.random() * 300 + 100) {
+                bgBushes.push({ x: x, w: 60 + Math.random() * 60, h: 40 + Math.random() * 30 });
+            }
+        }
+
+        function generateChunk(startX) {
+            let currentX = startX;
+            let endX = startX + 2500; 
+
+            generateBackgrounds(startX);
+
+            while (currentX < endX) {
+                let groundWidth = Math.floor(Math.random() * 10 + 8) * TILE_SIZE; 
+                let groundY = GAME_HEIGHT - TILE_SIZE * 1.5; // 바닥 높이
+                mapObjects.push({ type: 'ground', x: currentX, y: groundY, w: groundWidth, h: TILE_SIZE * 2 });
+                
+                let numStructures = Math.floor(groundWidth / (TILE_SIZE * 5));
+                for(let i = 0; i < numStructures; i++) {
+                    let structX = currentX + Math.random() * (groundWidth - TILE_SIZE * 4) + TILE_SIZE * 2;
+                    let typeRoll = Math.random();
+
+                    if (typeRoll < 0.25) { // 파이프 
+                        let pipeHeight = Math.floor(Math.random() * 2 + 1) * TILE_SIZE; // 밸런스: 1~2칸 높이로 축소
+                        let pipeY = groundY - pipeHeight;
+                        let pipeW = TILE_SIZE * 1.5;
+                        mapObjects.push({ type: 'pipe', x: structX, y: pipeY, w: pipeW, h: pipeHeight });
+                        
+                        // 뻐끔플라워
+                        if(Math.random() < 0.6) {
+                            enemies.push({ type: 'plant', x: structX + pipeW/2, baseY: pipeY, offsetY: 10, dir: -1, speed: 1.2, waitTimer: 0, state: 'moving' });
+                        }
+                    } 
+                    else if (typeRoll < 0.40) { // 가시 (작게)
+                        mapObjects.push({ type: 'spike', x: structX, y: groundY - 20, w: TILE_SIZE, h: 20 });
+                    }
+                    else if (typeRoll < 0.60) { // 벽돌 계단
+                        let steps = Math.floor(Math.random() * 3 + 1); 
+                        for(let step=0; step<steps; step++) {
+                            mapObjects.push({ type: 'brick', x: structX + step*TILE_SIZE, y: groundY - (step+1)*TILE_SIZE, w: TILE_SIZE * (steps-step), h: TILE_SIZE });
+                        }
+                    }
+                    else { // 물음표 블록
+                        mapObjects.push({ type: 'q-block', x: structX, y: groundY - TILE_SIZE * 3.5, w: TILE_SIZE, h: TILE_SIZE, used: false });
+                        // 양옆에 벽돌 추가
+                        if(Math.random() < 0.5) mapObjects.push({ type: 'brick', x: structX - TILE_SIZE, y: groundY - TILE_SIZE * 3.5, w: TILE_SIZE, h: TILE_SIZE });
+                        if(Math.random() < 0.5) mapObjects.push({ type: 'brick', x: structX + TILE_SIZE, y: groundY - TILE_SIZE * 3.5, w: TILE_SIZE, h: TILE_SIZE });
+                    }
+                }
+
+                // 굼바 스폰
+                if (Math.random() < 0.7) {
+                    enemies.push({ type: 'goomba', x: currentX + groundWidth - 100, y: groundY - 32, w: 32, h: 32, vx: -1.0, vy: 0, dead: false, deathTimer: 0 });
+                }
+
+                currentX += groundWidth;
+                // 구멍 생성 (점프력에 맞게 구멍 크기 축소)
+                if (currentX < endX) currentX += Math.floor(Math.random() * 2 + 1.5) * TILE_SIZE; 
+            }
+            return currentX;
+        }
+
+        function checkCollision(r1, r2) {
+            return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x && r1.y < r2.y + r2.h && r1.y + r1.h > r2.y;
+        }
+
+        function addScore(amount) {
+            score += amount;
+            scoreEl.innerText = score.toString().padStart(6, '0');
+        }
+
+        function shootFireball() {
+            let pVx = player.facingLeft ? -8 : 8;
+            let px = player.facingLeft ? player.x - 10 : player.x + player.w;
+            projectiles.push({ type: 'fireball', x: px, y: player.y + 10, w: 12, h: 12, vx: pVx, vy: 2, dead: false });
+        }
+
+        function triggerGameOver() {
+            if (player.starTimer > 0) return; 
+            isGameOver = true;
+            gameOverScreen.style.display = 'flex';
+        }
+
+        function update() {
+            if (isGameOver) return;
+            frameCount++;
+
+            if (player.cooldown > 0) player.cooldown--;
+            if (player.starTimer > 0) player.starTimer--;
+
+            let cdPercent = Math.max(0, 1 - (player.cooldown / 180)) * 100;
+            cdFill.style.width = cdPercent + '%';
+            cdFill.style.background = player.cooldown === 0 ? 'linear-gradient(90deg, #00FF00, #32CD32)' : 'linear-gradient(90deg, #FF4500, #FF0000)';
+
+            // 움직임 상태 업데이트
+            if (!player.grounded) player.state = 'jump';
+            else if (keys.left || keys.right) player.state = 'run';
+            else player.state = 'idle';
+
+            if (keys.left) { player.vx = -player.speed; player.facingLeft = true; player.walkAnim += 0.25; }
+            else if (keys.right) { player.vx = player.speed; player.facingLeft = false; player.walkAnim += 0.25; }
+            else { player.vx = 0; player.walkAnim = 0; }
+
+            // X 충돌
+            player.x += player.vx;
+            for (let obj of mapObjects) {
+                if (obj.type === 'spike') {
+                    let spikeHitbox = {x: obj.x+4, y: obj.y+8, w: obj.w-8, h: obj.h-8};
+                    if (checkCollision(player, spikeHitbox)) triggerGameOver();
+                }
+                else if (checkCollision(player, obj)) {
+                    if (player.vx > 0) player.x = obj.x - player.w; 
+                    else if (player.vx < 0) player.x = obj.x + obj.w; 
+                    player.vx = 0;
+                }
+            }
+            if (player.x < cameraX) player.x = cameraX; 
+
+            // Y 충돌
+            player.vy += player.gravity;
+            if (player.vy > 15) player.vy = 15; 
+            player.y += player.vy;
+            player.grounded = false;
+
+            for (let obj of mapObjects) {
+                if (obj.type === 'spike') continue; 
+                if (checkCollision(player, obj)) {
+                    if (player.vy > 0) { 
+                        player.y = obj.y - player.h; player.vy = 0; player.grounded = true;
+                    } 
+                    else if (player.vy < 0) { 
+                        player.y = obj.y + obj.h; player.vy = 0;
+                        if (obj.type === 'q-block' && !obj.used) {
+                            obj.used = true;
+                            let rand = Math.random();
+                            if (rand < 0.15) items.push({ type: 'flower', x: obj.x + 4, y: obj.y - 32, w: 32, h: 32, vx: 0, vy: 0, active: false, timer: 20 });
+                            else if (rand < 0.3) items.push({ type: 'star', x: obj.x + 4, y: obj.y - 32, w: 32, h: 32, vx: 3.0, vy: -6 });
+                            else if (rand < 0.6) items.push({ type: 'mushroom', x: obj.x + 4, y: obj.y, w: 32, h: 32, vx: 2.0, vy: -5 });
+                            else { particles.push({ x: obj.x + TILE_SIZE/4, y: obj.y, vy: -10, timer: 25, type: 'coin' }); addScore(100); }
+                        }
+                    }
+                }
+            }
+
+            // 아이템 로직
+            for(let i = items.length - 1; i >= 0; i--) {
+                let item = items[i];
+                if (item.type === 'flower') {
+                    if (item.timer > 0) item.timer--; else item.active = true;
+                } else {
+                    item.vy += player.gravity; item.x += item.vx; item.y += item.vy;
+                    for (let obj of mapObjects) {
+                        if(obj.type === 'spike') continue;
+                        if (checkCollision(item, obj)) {
+                            if (item.vy > 0 && item.y + item.h > obj.y) { item.y = obj.y - item.h; item.vy = item.type==='star' ? -9 : 0; }
+                            else if (item.vx > 0 && item.x + item.w > obj.x) { item.vx = -item.vx; item.x = obj.x - item.w; }
+                            else if (item.vx < 0 && item.x < obj.x + obj.w) { item.vx = -item.vx; item.x = obj.x + obj.w; }
+                        }
+                    }
+                }
+
+                if (checkCollision(player, item)) {
+                    if (item.type === 'mushroom') { addScore(1000); player.cooldown = 0; for(let p=0; p<15; p++) particles.push({ x: player.x+15, y: player.y+20, vx: (Math.random()-0.5)*6, vy: (Math.random()-0.5)*6, timer: 30, type: 'sparkle' }); } 
+                    else if (item.type === 'flower' && item.active) { addScore(1000); player.powerup = 'fire'; player.cooldown = 0; for(let p=0; p<20; p++) particles.push({ x: player.x+15, y: player.y+20, vx: (Math.random()-0.5)*6, vy: (Math.random()-0.5)*6, timer: 30, type: 'fire' }); } 
+                    else if (item.type === 'star') { addScore(1000); player.starTimer = 600; player.cooldown = 0; }
+                    if (item.type !== 'flower' || item.active) items.splice(i, 1);
+                }
+                else if (item.y > GAME_HEIGHT) items.splice(i, 1);
+            }
+
+            // 투사체 로직
+            for (let i = projectiles.length - 1; i >= 0; i--) {
+                let p = projectiles[i];
+                p.vy += player.gravity; p.x += p.vx; p.y += p.vy;
+                let hitWall = false;
+                for (let obj of mapObjects) {
+                    if(obj.type === 'spike') continue;
+                    if (checkCollision(p, obj)) {
+                        if (p.vy > 0 && p.y + p.h > obj.y) { p.y = obj.y - p.h; p.vy = -6; } 
+                        else hitWall = true;
+                    }
+                }
+
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    let e = enemies[j];
+                    if (!e.dead && checkCollision(p, e)) {
+                        e.dead = true; e.deathTimer = 15; hitWall = true; addScore(200);
+                        for(let k=0; k<10; k++) particles.push({ x: e.x+e.w/2, y: e.y+e.h/2, vx: (Math.random()-0.5)*6, vy: (Math.random()-0.5)*6, timer: 20, type: 'fire' });
+                    }
+                }
+
+                if (hitWall || p.x > cameraX + GAME_WIDTH || p.x < cameraX) {
+                    for(let k=0; k<5; k++) particles.push({ x: p.x+p.w/2, y: p.y+p.h/2, vx: (Math.random()-0.5)*2, vy: (Math.random()-0.5)*2, timer: 10, type: 'smoke' });
+                    projectiles.splice(i, 1);
+                }
+            }
+
+            // 적 로직
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let e = enemies[i];
+                if(e.type === 'plant') { 
+                    if(e.state === 'moving') {
+                        e.offsetY += e.dir * e.speed;
+                        if(e.offsetY <= -45) { e.offsetY = -45; e.state = 'waiting'; e.waitTimer = 60; e.dir = 1; }
+                        if(e.offsetY >= 10) { e.offsetY = 10; e.state = 'waiting'; e.waitTimer = 80; e.dir = -1; }
+                    } else { e.waitTimer--; if(e.waitTimer <= 0) e.state = 'moving'; }
+                    
+                    let plantHitbox = { x: e.x - 14, y: e.baseY + e.offsetY - 14, w: 28, h: 35 };
+                    if(!e.dead && e.offsetY < 0 && checkCollision(player, plantHitbox)) {
+                        if (player.starTimer > 0) { e.dead = true; e.deathTimer = 15; addScore(300); } 
+                        else triggerGameOver();
+                    }
+                } 
+                else if (e.type === 'goomba') { 
+                    if(e.dead) {
+                        e.vy += player.gravity; e.y += e.vy; e.deathTimer--;
+                        if(e.y > GAME_HEIGHT || e.deathTimer <= 0) enemies.splice(i, 1);
+                    } else {
+                        e.vy += player.gravity; e.y += e.vy; e.x += e.vx;
+                        for (let obj of mapObjects) {
+                            if(obj.type === 'spike') continue;
+                            if (checkCollision(e, obj)) {
+                                if (e.vy > 0 && e.y + e.h > obj.y) { e.y = obj.y - e.h; e.vy = 0; }
+                                else if (e.vx < 0 && e.x < obj.x + obj.w) { e.vx = -e.vx; e.x = obj.x + obj.w; }
+                                else if (e.vx > 0 && e.x + e.w > obj.x) { e.vx = -e.vx; e.x = obj.x - e.w; }
+                            }
+                        }
+
+                        if(checkCollision(player, e)) {
+                            if (player.starTimer > 0) { e.dead = true; e.vy = -5; e.deathTimer = 60; addScore(200); }
+                            else if(player.vy > 0 && player.y + player.h < e.y + 20) {
+                                e.dead = true; e.deathTimer = 30; player.vy = -10; player.cooldown = 0; addScore(200);
+                                for(let p=0; p<5; p++) particles.push({ x: e.x+16, y: e.y, vx: (Math.random()-0.5)*4, vy: -Math.random()*4, timer: 15, type: 'smoke' });
+                            } else triggerGameOver();
+                        }
+                    }
+                }
+                if(e.x < cameraX - 1000) enemies.splice(i, 1);
+            }
+
+            // 카메라 이동 및 무한 맵 생성
+            let targetCam = player.x - GAME_WIDTH * 0.35;
+            if (targetCam > cameraX) cameraX = targetCam;
+            if (cameraX + GAME_WIDTH > lastMapX - 1200) lastMapX = generateChunk(lastMapX);
+
+            // 가비지 컬렉션 (지나간 맵/배경 삭제)
+            mapObjects = mapObjects.filter(obj => obj.x + obj.w > cameraX - 800);
+            bgClouds = bgClouds.filter(c => c.x > cameraX - 1000);
+            bgMountains = bgMountains.filter(m => m.x > cameraX - 1000);
+            bgBushes = bgBushes.filter(b => b.x > cameraX - 1000);
+
+            let dist = Math.floor(player.x / 100);
+            if(dist > distance) { distance = dist; distanceEl.innerText = distance; }
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx; p.y += p.vy; 
+                if(p.type === 'coin') p.vy += 0.6;
+                p.timer--;
+                if (p.timer <= 0) particles.splice(i, 1);
+            }
+
+            if (player.y > GAME_HEIGHT + 100) triggerGameOver();
+        }
+
+        function drawDetailedMario(x, y, w, h, facingLeft, state, walkAnim, powerup, starTimer) {
+            ctx.save();
+            ctx.translate(x + w/2, y + h/2);
+            if (facingLeft) ctx.scale(-1, 1);
+            ctx.translate(-w/2, -h/2);
+
+            // 무적 별 무지개 효과
+            let hatC = '#FF0000', shirtC = '#FF0000', pantsC = '#0000FF';
+            if (starTimer > 0) {
+                let hue = (frameCount * 15) % 360;
+                hatC = shirtC = `hsl(${hue}, 100%, 50%)`;
+                pantsC = `hsl(${(hue+180)%360}, 100%, 50%)`;
+            } else if (powerup === 'fire') {
+                hatC = shirtC = '#FFFFFF'; pantsC = '#FF0000';
+            }
+
+            let skin = '#FFCC99'; let shoeC = '#8B4513'; let gloveC = '#FFFFFF';
+            let bx = w/2; let by = h/2;
+            let swing = state === 'run' ? Math.sin(walkAnim) * 8 : 0;
+            let jumpOffset = state === 'jump' ? -4 : 0;
+
+            // 뒷팔 (점프시 만세, 런시 흔들기)
+            ctx.fillStyle = shirtC;
+            if(state === 'jump') { ctx.beginPath(); ctx.arc(bx + 4, by - 8, 5, 0, Math.PI*2); ctx.fill(); ctx.fillStyle = gloveC; ctx.beginPath(); ctx.arc(bx + 6, by - 14, 6, 0, Math.PI*2); ctx.fill(); }
+            else { ctx.beginPath(); ctx.arc(bx + 4 + swing, by + 4, 5, 0, Math.PI*2); ctx.fill(); ctx.fillStyle = gloveC; ctx.beginPath(); ctx.arc(bx + 6 + swing, by + 10, 5, 0, Math.PI*2); ctx.fill(); }
+
+            // 뒷다리
+            ctx.fillStyle = pantsC;
+            if(state === 'jump') { ctx.fillRect(bx + 2, by + 6, 8, 8); ctx.fillStyle = shoeC; ctx.beginPath(); ctx.ellipse(bx + 6, by + 16, 7, 5, 0, 0, Math.PI*2); ctx.fill(); }
+            else { ctx.fillRect(bx + 2 - swing, by + 8, 8, 10); ctx.fillStyle = shoeC; ctx.beginPath(); ctx.ellipse(bx + 6 - swing, by + 18, 7, 4, 0, 0, Math.PI*2); ctx.fill(); }
+
+            // 몸통 (멜빵바지)
+            ctx.fillStyle = pantsC;
+            ctx.beginPath(); ctx.ellipse(bx, by + 4 + jumpOffset, 11, 10, 0, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#FFD700'; // 단추
+            ctx.beginPath(); ctx.arc(bx - 5, by + jumpOffset, 2, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(bx + 5, by + jumpOffset, 2, 0, Math.PI*2); ctx.fill();
+
+            // 앞다리
+            ctx.fillStyle = pantsC;
+            if(state === 'jump') { ctx.fillRect(bx - 10, by + 4, 8, 8); ctx.fillStyle = shoeC; ctx.beginPath(); ctx.ellipse(bx - 8, by + 14, 7, 5, 0, 0, Math.PI*2); ctx.fill(); }
+            else { ctx.fillRect(bx - 10 + swing, by + 8, 8, 10); ctx.fillStyle = shoeC; ctx.beginPath(); ctx.ellipse(bx - 6 + swing, by + 18, 7, 4, 0, 0, Math.PI*2); ctx.fill(); }
+
+            // 머리 & 얼굴
+            let headY = by - 12 + jumpOffset;
+            ctx.fillStyle = skin;
+            ctx.beginPath(); ctx.arc(bx, headY, 9, 0, Math.PI*2); ctx.fill(); // 기본 얼굴
+            ctx.beginPath(); ctx.ellipse(bx + 8, headY + 2, 5, 4, 0, 0, Math.PI*2); ctx.fill(); // 큰 코
+            
+            // 눈 & 수염
+            ctx.fillStyle = '#000';
+            ctx.fillRect(bx + 4, headY - 4, 2, 4); // 눈
+            ctx.beginPath(); ctx.ellipse(bx + 7, headY + 5, 6, 2, 0.2, 0, Math.PI*2); ctx.fill(); // 콧수염
+
+            // 모자 (챙 포함)
+            ctx.fillStyle = hatC;
+            ctx.beginPath(); ctx.arc(bx - 1, headY - 4, 8, Math.PI, 0); ctx.fill(); // 돔
+            ctx.beginPath(); ctx.ellipse(bx + 5, headY - 4, 9, 2.5, 0, 0, Math.PI*2); ctx.fill(); // 챙
+
+            // 앞팔
+            ctx.fillStyle = shirtC;
+            if(state === 'jump') { ctx.beginPath(); ctx.arc(bx - 6, by - 6, 5, 0, Math.PI*2); ctx.fill(); ctx.fillStyle = gloveC; ctx.beginPath(); ctx.arc(bx - 8, by - 12, 6, 0, Math.PI*2); ctx.fill(); }
+            else { ctx.beginPath(); ctx.arc(bx - 6 - swing, by + 4, 5, 0, Math.PI*2); ctx.fill(); ctx.fillStyle = gloveC; ctx.beginPath(); ctx.arc(bx - 4 - swing, by + 10, 5, 0, Math.PI*2); ctx.fill(); }
+
+            ctx.restore();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+            ctx.save();
+            
+            // 패럴랙스 구름 (가장 느림, 자동 이동)
+            for (let c of bgClouds) {
+                let renderX = c.x - (cameraX * 0.1);
+                c.x -= c.speed; // 구름 자체의 흐름
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.save(); ctx.translate(renderX, c.y); ctx.scale(c.scale, c.scale);
+                ctx.beginPath(); ctx.arc(0, 0, 30, 0, Math.PI * 2);
+                ctx.arc(25, -15, 35, 0, Math.PI * 2); ctx.arc(50, 0, 30, 0, Math.PI * 2); ctx.fill();
+                ctx.restore();
+            }
+
+            // 패럴랙스 산 (중간 속도)
+            for (let m of bgMountains) {
+                let renderX = m.x - (cameraX * 0.3);
+                let grad = ctx.createLinearGradient(0, GAME_HEIGHT - m.h, 0, GAME_HEIGHT);
+                grad.addColorStop(0, '#2E8B57'); grad.addColorStop(1, '#006400');
+                ctx.fillStyle = grad;
+                ctx.beginPath(); ctx.moveTo(renderX, GAME_HEIGHT);
+                ctx.lineTo(renderX + m.w/2, GAME_HEIGHT - m.h);
+                ctx.lineTo(renderX + m.w, GAME_HEIGHT); ctx.fill();
+                // 눈 덮인 꼭대기
+                ctx.fillStyle = '#FFF'; ctx.beginPath(); ctx.moveTo(renderX + m.w/2, GAME_HEIGHT - m.h);
+                ctx.lineTo(renderX + m.w/2 - m.w*0.15, GAME_HEIGHT - m.h*0.7);
+                ctx.lineTo(renderX + m.w/2 + m.w*0.15, GAME_HEIGHT - m.h*0.7); ctx.fill();
+            }
+
+            // 패럴랙스 덤불 (빠름)
+            for (let b of bgBushes) {
+                let renderX = b.x - (cameraX * 0.6);
+                let by = GAME_HEIGHT - TILE_SIZE * 1.5; // 바닥 위
+                ctx.fillStyle = '#32CD32';
+                ctx.beginPath(); ctx.arc(renderX, by, b.h, 0, Math.PI*2);
+                ctx.arc(renderX + b.w/2, by - b.h*0.3, b.h*1.2, 0, Math.PI*2);
+                ctx.arc(renderX + b.w, by, b.h*0.9, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = '#228B22'; // 그림자
+                ctx.beginPath(); ctx.arc(renderX + b.w/2, by, b.h, 0, Math.PI, false); ctx.fill();
+            }
+
+            ctx.translate(-cameraX, 0); // 실제 맵 오브젝트 이동
+
+            // 맵 오브젝트 그리기
+            for (let obj of mapObjects) {
+                if (obj.type === 'ground') {
+                    // 잔디 레이어
+                    ctx.fillStyle = '#5CB85C'; ctx.fillRect(obj.x, obj.y, obj.w, 12);
+                    ctx.fillStyle = '#4CAE4C'; ctx.fillRect(obj.x, obj.y + 12, obj.w, 8);
+                    // 흙 레이어
+                    ctx.fillStyle = '#D98745'; ctx.fillRect(obj.x, obj.y + 20, obj.w, obj.h - 20);
+                    // 흙 질감 패턴
+                    ctx.fillStyle = '#B86524';
+                    for(let i = 0; i < obj.w; i += 30) {
+                        ctx.fillRect(obj.x + i + (i%20), obj.y + 30 + (i%15), 10, 5);
+                        ctx.fillRect(obj.x + i, obj.y + 50 + (i%25), 15, 8);
+                    }
+                } 
+                else if (obj.type === 'brick') {
+                    ctx.fillStyle = '#C84C0C'; ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+                    ctx.fillStyle = '#000'; ctx.lineWidth = 2;
+                    ctx.strokeRect(obj.x, obj.y, obj.w, obj.h);
+                    ctx.beginPath(); ctx.moveTo(obj.x, obj.y + obj.h/2); ctx.lineTo(obj.x + obj.w, obj.y + obj.h/2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(obj.x + obj.w/2, obj.y); ctx.lineTo(obj.x + obj.w/2, obj.y + obj.h/2); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(obj.x + obj.w/4, obj.y + obj.h/2); ctx.lineTo(obj.x + obj.w/4, obj.y + obj.h); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(obj.x + obj.w*0.75, obj.y + obj.h/2); ctx.lineTo(obj.x + obj.w*0.75, obj.y + obj.h); ctx.stroke();
+                }
+                else if (obj.type === 'pipe') {
+                    let grad = ctx.createLinearGradient(obj.x, 0, obj.x + obj.w, 0);
+                    grad.addColorStop(0, '#008800'); grad.addColorStop(0.2, '#55CC55'); grad.addColorStop(0.7, '#00AA00'); grad.addColorStop(1, '#005500');
+                    ctx.fillStyle = grad; ctx.fillRect(obj.x, obj.y, obj.w, obj.h); 
+                    ctx.fillRect(obj.x - 4, obj.y, obj.w + 8, TILE_SIZE/1.5); 
+                    ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+                    ctx.strokeRect(obj.x, obj.y, obj.w, obj.h); ctx.strokeRect(obj.x - 4, obj.y, obj.w + 8, TILE_SIZE/1.5);
+                }
+                else if (obj.type === 'spike') {
+                    ctx.fillStyle = '#CCC';
+                    for(let i=0; i < obj.w/20; i++) {
+                        let sx = obj.x + i*20;
+                        ctx.beginPath(); ctx.moveTo(sx + 10, obj.y); ctx.lineTo(sx + 20, obj.y+obj.h); ctx.lineTo(sx, obj.y+obj.h); ctx.fill();
+                        ctx.strokeStyle = '#000'; ctx.stroke();
+                    }
+                }
+                else if (obj.type === 'q-block') {
+                    if (obj.used) {
+                        ctx.fillStyle = '#8B4513'; ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+                        ctx.fillStyle = '#000'; ctx.strokeRect(obj.x, obj.y, obj.w, obj.h);
+                        ctx.fillRect(obj.x+4, obj.y+4, 4, 4); ctx.fillRect(obj.x+obj.w-8, obj.y+4, 4, 4);
+                        ctx.fillRect(obj.x+4, obj.y+obj.h-8, 4, 4); ctx.fillRect(obj.x+obj.w-8, obj.y+obj.h-8, 4, 4);
+                    } else {
+                        ctx.fillStyle = (frameCount % 40 < 20) ? '#FFCC00' : '#FF9900'; 
+                        ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+                        ctx.fillStyle = '#000'; ctx.strokeRect(obj.x, obj.y, obj.w, obj.h);
+                        ctx.fillStyle = '#B8860B'; ctx.font = 'bold 28px "Arial Black"';
+                        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                        ctx.fillText('?', obj.x + obj.w/2, obj.y + obj.h/2 + 2);
+                    }
+                }
+            }
+
+            // 적 
+            for (let e of enemies) {
+                if(e.dead && e.type === 'plant') continue;
+                if(e.type === 'plant') {
+                    let px = e.x; let py = e.baseY + e.offsetY;
+                    ctx.fillStyle = '#00AA00'; ctx.fillRect(px - 6, py, 12, 60); // 줄기
+                    let headGrad = ctx.createRadialGradient(px, py, 0, px, py, 16);
+                    headGrad.addColorStop(0, '#FF0000'); headGrad.addColorStop(1, '#990000');
+                    ctx.fillStyle = headGrad; ctx.beginPath(); ctx.arc(px, py, 16, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = '#FFF'; // 반점
+                    ctx.beginPath(); ctx.arc(px - 6, py - 8, 3, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(px + 8, py - 6, 2.5, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(px - 8, py + 6, 2.5, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(px + 6, py + 8, 3, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = '#000'; ctx.fillRect(px - 16, py - 2, 32, 4); // 입
+                    ctx.fillStyle = '#FFF'; // 이빨
+                    for(let i = px - 14; i <= px + 10; i += 6) {
+                        ctx.beginPath(); ctx.moveTo(i, py - 2); ctx.lineTo(i + 3, py - 6); ctx.lineTo(i + 6, py - 2); ctx.fill(); 
+                        ctx.beginPath(); ctx.moveTo(i, py + 2); ctx.lineTo(i + 3, py + 6); ctx.lineTo(i + 6, py + 2); ctx.fill(); 
+                    }
+                } 
+                else if (e.type === 'goomba') {
+                    if (e.dead) {
+                        ctx.fillStyle = '#A0522D'; ctx.beginPath(); ctx.ellipse(e.x + e.w/2, e.y + e.h - 4, e.w/2 + 4, 4, 0, 0, Math.PI*2); ctx.fill();
+                    } else {
+                        let gx = e.x + e.w/2; let gy = e.y + 12;
+                        ctx.fillStyle = '#A0522D'; ctx.beginPath(); ctx.arc(gx, gy, 14, Math.PI, 0); ctx.fill();
+                        ctx.fillRect(e.x+2, gy, e.w-4, 10);
+                        ctx.fillStyle = '#FFE4C4'; ctx.fillRect(e.x + 6, e.y + 22, e.w - 12, 6);
+                        ctx.fillStyle = '#000'; // 눈
+                        ctx.fillRect(e.x + 10, e.y + 8, 3, 6); ctx.fillRect(e.x + 19, e.y + 8, 3, 6); 
+                        ctx.strokeStyle = '#000'; ctx.lineWidth = 2; // 화난 눈썹
+                        ctx.beginPath(); ctx.moveTo(gx-2, gy-4); ctx.lineTo(gx-8, gy-8); ctx.stroke();
+                        ctx.beginPath(); ctx.moveTo(gx+2, gy-4); ctx.lineTo(gx+8, gy-8); ctx.stroke();
+                        let walkBounce = Math.sin(frameCount * 0.2) > 0 ? 2 : -2;
+                        ctx.fillStyle = '#000';
+                        ctx.beginPath(); ctx.ellipse(e.x + 8, e.y + 28 + walkBounce, 6, 4, 0, 0, Math.PI*2); ctx.fill();
+                        ctx.beginPath(); ctx.ellipse(e.x + 24, e.y + 28 - walkBounce, 6, 4, 0, 0, Math.PI*2); ctx.fill();
+                    }
+                }
+            }
+
+            // 아이템
+            for (let item of items) {
+                if(item.type === 'mushroom') {
+                    ctx.fillStyle = '#E52521'; ctx.beginPath(); ctx.arc(item.x + 16, item.y + 12, 14, Math.PI, 0); ctx.fill();
+                    ctx.fillStyle = '#FFF';
+                    ctx.beginPath(); ctx.arc(item.x + 8, item.y + 6, 4, 0, Math.PI*2); ctx.fill();
+                    ctx.beginPath(); ctx.arc(item.x + 24, item.y + 6, 4, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = '#FFDAB9'; ctx.fillRect(item.x + 8, item.y + 12, 16, 14);
+                    ctx.fillStyle = '#000'; ctx.fillRect(item.x + 12, item.y + 16, 2, 4); ctx.fillRect(item.x + 18, item.y + 16, 2, 4);
+                } else if (item.type === 'flower') {
+                    let cx = item.x + 16; let cy = item.y + 16;
+                    ctx.fillStyle = '#00FF00'; ctx.fillRect(cx - 2, cy, 4, 16); 
+                    ctx.beginPath(); ctx.ellipse(cx - 6, cy + 8, 6, 3, 0.5, 0, Math.PI*2); ctx.fill(); 
+                    ctx.fillStyle = '#FF4500'; ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = '#FFD700'; ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = '#000'; ctx.fillRect(cx - 2, cy - 2, 1.5, 3); ctx.fillRect(cx + 1, cy - 2, 1.5, 3);
+                } else if (item.type === 'star') {
+                    let cx = item.x + 16; let cy = item.y + 16;
+                    ctx.fillStyle = (frameCount % 10 < 5) ? '#FFD700' : '#FFFACD';
+                    ctx.beginPath();
+                    for (let j = 0; j < 5; j++) {
+                        ctx.lineTo(cx + Math.cos((18 + j * 72) * Math.PI / 180) * 14, cy - Math.sin((18 + j * 72) * Math.PI / 180) * 14);
+                        ctx.lineTo(cx + Math.cos((54 + j * 72) * Math.PI / 180) * 6, cy - Math.sin((54 + j * 72) * Math.PI / 180) * 6);
+                    }
+                    ctx.closePath(); ctx.fill();
+                    ctx.fillStyle = '#000'; ctx.fillRect(cx - 4, cy - 2, 2, 4); ctx.fillRect(cx + 2, cy - 2, 2, 4);
+                }
+            }
+
+            // 파이어볼
+            for (let p of projectiles) {
+                let grad = ctx.createRadialGradient(p.x+6, p.y+6, 0, p.x+6, p.y+6, 6);
+                grad.addColorStop(0, '#FFF'); grad.addColorStop(0.4, '#FFD700'); grad.addColorStop(1, '#FF4500');
+                ctx.fillStyle = grad;
+                ctx.beginPath(); ctx.arc(p.x+6, p.y+6, 6, 0, Math.PI*2); ctx.fill();
+            }
+
+            // 파티클
+            for (let p of particles) {
+                if (p.type === 'coin') {
+                    ctx.fillStyle = '#FFD700'; ctx.beginPath(); ctx.ellipse(p.x, p.y, 8, 12, 0, 0, Math.PI*2); ctx.fill();
+                    ctx.strokeStyle = '#DAA520'; ctx.lineWidth = 2; ctx.stroke();
+                    ctx.fillStyle = '#FFF'; ctx.fillRect(p.x - 2, p.y - 6, 2, 8);
+                } else {
+                    let color = p.type === 'smoke' ? `rgba(200,200,200,${p.timer/30})` : 
+                                p.type === 'sparkle' ? `rgba(255,255,0,${p.timer/30})` : `rgba(255,69,0,${p.timer/30})`;
+                    ctx.fillStyle = color;
+                    ctx.beginPath(); ctx.arc(p.x, p.y, p.timer/4, 0, Math.PI*2); ctx.fill();
+                }
+            }
+
+            drawDetailedMario(player.x, player.y, player.w, player.h, player.facingLeft, player.state, player.walkAnim, player.powerup, player.starTimer);
+            ctx.restore();
+        }
+
+        function resetGame() {
+            isGameOver = false; gameOverScreen.style.display = 'none';
+            score = 0; distance = 0; scoreEl.innerText = '000000'; distanceEl.innerText = '0';
+            cameraX = 0; keys.left = false; keys.right = false; jumpPressed = false; zPressed = false;
+            
+            player.x = 200; player.y = 100; player.vx = 0; player.vy = 0; 
+            player.jumps = 0; player.cooldown = 0; player.walkAnim = 0; player.state = 'idle';
+            player.powerup = 'normal'; player.starTimer = 0;
+            
+            mapObjects = []; enemies = []; items = []; particles = []; projectiles = [];
+            bgMountains = []; bgBushes = []; bgClouds = [];
+            lastMapX = generateChunk(-200);
+        }
+
+        function gameLoop() {
+            update(); draw(); requestAnimationFrame(gameLoop);
+        }
+
+        resetGame(); 
+        gameLoop();
+    </script>
+</body>
+</html>
