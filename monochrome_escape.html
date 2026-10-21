@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Monochrome Escape</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Noto Sans KR', sans-serif; user-select: none; }
+        #game-canvas { display: block; width: 100vw; height: 100vh; position: absolute; z-index: 1; }
+        
+        /* High-quality CSS Film Grain Overlay */
+        #noise-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 9999; opacity: 0.15; mix-blend-mode: overlay;
+        }
+
+        /* Screens */
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle at center, #1a1a1a 0%, #000 100%);
+            display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 50;
+        }
+        .title-glow {
+            font-size: 5rem; font-weight: 700; color: #fff;
+            text-shadow: 0 0 20px rgba(255,255,255,0.8), 0 0 40px #555; letter-spacing: 0.3em; margin-bottom: 3rem; text-align: center;
+        }
+        .controls-info {
+            display: grid; grid-template-columns: 100px auto; gap: 15px 25px; color: #aaa;
+            font-size: 1.2rem; font-weight: 300; margin-bottom: 4rem; background: rgba(0,0,0,0.6);
+            padding: 40px 60px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.15);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+        }
+        .controls-info span.key { color: #fff; font-weight: 500; text-align: right; border-right: 2px solid #555; padding-right: 20px; }
+        .action-btn {
+            font-family: inherit; font-size: 1.5rem; font-weight: 500; color: #fff;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.6); padding: 20px 80px;
+            border-radius: 8px; cursor: pointer; transition: 0.3s; letter-spacing: 3px;
+            text-transform: uppercase;
+        }
+        .action-btn:hover { background: rgba(255,255,255,0.2); border-color: #fff; box-shadow: 0 0 30px rgba(255,255,255,0.3); transform: translateY(-2px); }
+
+        /* In-Game UI */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 20; display: none; }
+        #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 4px; height: 4px; background: rgba(255,255,255,0.9); border-radius: 50%; box-shadow: 0 0 5px #000; }
+        
+        #top-hud { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); text-align: center; color: #eee; text-shadow: 2px 2px 4px #000; }
+        #top-hud .sub { font-size: 16px; opacity: 0.9; }
+        #top-hud .main { font-size: 24px; font-weight: 700; margin-top: 8px; letter-spacing: 2px; }
+
+        #stamina-container { position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%); width: 400px; height: 6px; background: rgba(0,0,0,0.8); border-radius: 3px; border: 1px solid rgba(255,255,255,0.3); overflow: hidden; }
+        #stamina-bar { width: 100%; height: 100%; background: linear-gradient(90deg, #aaa, #fff); box-shadow: 0 0 10px rgba(255,255,255,0.8); transition: width 0.1s linear; }
+
+        #interaction-prompt {
+            position: absolute; top: 60%; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.8); border: 1px solid rgba(255,255,255,0.3);
+            padding: 12px 30px; border-radius: 8px; display: none; align-items: center; gap: 20px; color: #fff;
+            backdrop-filter: blur(5px); box-shadow: 0 5px 15px rgba(0,0,0,0.5); font-size: 1.1rem;
+        }
+        #interaction-prompt .key { width: 35px; height: 35px; border: 2px solid #fff; border-radius: 6px; display: flex; justify-content: center; align-items: center; font-weight: 700; font-size: 1.2rem; }
+        
+        #message-toast { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); color: #fff; font-size: 20px; font-weight: 500; text-shadow: 0 0 15px #000; opacity: 0; transition: opacity 0.3s; background: rgba(0,0,0,0.5); padding: 10px 30px; border-radius: 20px; }
+        
+        #jump-scare { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #900; display: none; z-index: 100; mix-blend-mode: color-burn; }
+        
+        /* 옷장 시야 효과 */
+        #hiding-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.95) 70%, #000 100%);
+            z-index: 15; pointer-events: none; display: none;
+            box-shadow: inset 0 0 100px #000;
+        }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <canvas id="game-canvas"></canvas>
+    <canvas id="noise-overlay"></canvas>
+    <div id="hiding-overlay"></div>
+    <div id="jump-scare"></div>
+
+    <div id="ui-layer">
+        <div id="crosshair"></div>
+        <div id="top-hud">
+            <div class="sub">어두운 미로를 탐험하며 서랍에서 열쇠를 찾아 탈출하세요</div>
+            <div class="main">열쇠: <span id="keys-count">0</span> / 4</div>
+        </div>
+        <div id="message-toast">메시지</div>
+        <div id="stamina-container"><div id="stamina-bar"></div></div>
+        
+        <div id="interaction-prompt">
+            <div class="key">E</div>
+            <div class="desc" id="prompt-desc">상호작용</div>
+        </div>
+    </div>
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="screen">
+        <div class="title-glow">ROBLOX MONOCHROME</div>
+        <div class="controls-info">
+            <span class="key">W A S D</span> <span>이동 (미끄러지듯 자연스러운 물리 엔진)</span>
+            <span class="key">마우스</span> <span>시야 회전</span>
+            <span class="key">Shift</span> <span>전력 질주 (스태미나 소모)</span>
+            <span class="key">F</span> <span>손전등 켜기/끄기</span>
+            <span class="key">E</span> <span>상호작용 (서랍 열기, 옷장 숨기)</span>
+        </div>
+        <button id="btn-start" class="action-btn">게임 시작</button>
+    </div>
+    
+    <!-- End Screens -->
+    <div id="game-over-screen" class="screen" style="display:none; background:#050000;">
+        <h1 style="color: #f00; font-size: 5rem; margin-bottom: 20px; text-shadow: 0 0 30px #f00;">사망</h1>
+        <p style="color: #aaa; margin-bottom: 50px; font-size: 1.5rem;">어둠 속의 무언가에게 잡혔습니다.</p>
+        <button class="action-btn" onclick="location.reload()">다시 시작</button>
+    </div>
+    
+    <div id="win-screen" class="screen" style="display:none;">
+        <h1 style="font-size: 5rem; margin-bottom: 20px; text-shadow: 0 0 30px #fff;">탈출 성공</h1>
+        <p style="color: #ccc; margin-bottom: 50px; font-size: 1.5rem;">무사히 미로를 빠져나왔습니다.</p>
+        <button class="action-btn" onclick="location.reload()">다시 플레이</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        // --- Config & State ---
+        const CFG = {
+            walkSpeed: 5.0, sprintSpeed: 8.5, playerHeight: 3.5, playerRadius: 0.8,
+            monsterSpeed: 6.8, // 플레이어가 안 뛰면 잡힘
+            reqKeys: 4,
+            cellSize: 8, // 맵 크기 비례
+            wallHeight: 10
+        };
+        let state = {
+            running: false, hiding: false, stamina: 100, keys: 0,
+            flashlightOn: false, isBlackout: false, nextBlackout: 0
+        };
+
+        // --- Core Variables ---
+        let scene, camera, renderer, controls;
+        let prevTime = performance.now();
+        let moveInput = { w: false, a: false, s: false, d: false, shift: false };
+        
+        let walls = [];       
+        let interactables = []; 
+        let activeAnimations = []; 
+        let mapLights = [];   
+        let ambientLight;
+        
+        let monster, escapeDoor;
+        let monsterState = 'patrol';
+
+        const gridW = 25, gridH = 25; 
+        let mazeGrid = [];
+
+        // --- Noise Effect (CSS Canvas) ---
+        const nCanvas = document.getElementById('noise-overlay');
+        const nCtx = nCanvas.getContext('2d', { alpha: true });
+        function drawNoise() {
+            nCanvas.width = window.innerWidth / 3; nCanvas.height = window.innerHeight / 3;
+            const imgData = nCtx.createImageData(nCanvas.width, nCanvas.height);
+            for (let i = 0; i < imgData.data.length; i += 4) {
+                const v = Math.random() * 255;
+                imgData.data[i] = v; imgData.data[i+1] = v; imgData.data[i+2] = v;
+                imgData.data[i+3] = Math.random() * 40; 
+            }
+            nCtx.putImageData(imgData, 0, 0);
+            requestAnimationFrame(drawNoise);
+        }
+        drawNoise();
+
+        // --- Procedural Textures (Liminal Space Style) ---
+        function createWallTex() {
+            const c = document.createElement('canvas'); c.width=512; c.height=512; const ctx = c.getContext('2d');
+            ctx.fillStyle = '#8a8d90'; ctx.fillRect(0,0,512,512); 
+            for(let i=0; i<40000; i++){ 
+                ctx.fillStyle = Math.random()>0.5 ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.08)';
+                ctx.fillRect(Math.random()*512, Math.random()*512, 2, 2);
+            }
+            // Dark Wood Trim (Top & Bottom)
+            ctx.fillStyle = '#2c1e16'; ctx.fillRect(0,0,512,45); 
+            ctx.fillStyle = '#1a100a'; ctx.fillRect(0,45,512,5); 
+            ctx.fillStyle = '#2c1e16'; ctx.fillRect(0,467,512,45); 
+            ctx.fillStyle = '#1a100a'; ctx.fillRect(0,462,512,5);
+            const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; return tex;
+        }
+        function createFloorTex() {
+            const c = document.createElement('canvas'); c.width=256; c.height=256; const ctx = c.getContext('2d');
+            ctx.fillStyle = '#5a5d62'; ctx.fillRect(0,0,256,256);
+            for(let i=0; i<30000; i++){ ctx.fillStyle = Math.random()>0.5?'rgba(0,0,0,0.15)':'rgba(255,255,255,0.1)'; ctx.fillRect(Math.random()*256, Math.random()*256, 1, 1); }
+            const tex = new THREE.CanvasTexture(c); tex.wrapS = tex.wrapT = THREE.RepeatWrapping; return tex;
+        }
+
+        const matWall = new THREE.MeshStandardMaterial({ map: createWallTex(), roughness: 0.9 });
+        const matFloor = new THREE.MeshStandardMaterial({ map: createFloorTex(), roughness: 0.8 });
+        const matCeil = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 1.0 });
+        const matWood = new THREE.MeshStandardMaterial({ color: 0x3d2314, roughness: 0.9 });
+        const matMetal = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.8, roughness: 0.4 });
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            scene.fog = new THREE.FogExp2(0x050505, 0.015); 
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 150);
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), antialias: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            // 평상시 매우 밝은 조명
+            ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+
+            // 엄청 밝고 넓은 손전등 설정
+            state.flashlight = new THREE.SpotLight(0xffffff, 0, 100, Math.PI/2.5, 0.3, 0.8);
+            state.flashlight.position.set(0, 0, 0);
+            state.flashlight.target.position.set(0, 0, -1);
+            camera.add(state.flashlight); camera.add(state.flashlight.target);
+            scene.add(camera);
+
+            controls = new PointerLockControls(camera, document.body);
+
+            generateNarrowMaze();
+            buildMapFromGrid();
+            createMonster();
+
+            document.getElementById('btn-start').addEventListener('click', startGame);
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            window.addEventListener('resize', onWindowResize);
+            
+            // 첫 정전 타이머 (15초 ~ 45초)
+            state.nextBlackout = performance.now() + 15000 + Math.random() * 30000;
+            requestAnimationFrame(animate);
+        }
+
+        function generateNarrowMaze() {
+            for(let i=0; i<gridH; i++) {
+                mazeGrid[i] = [];
+                for(let j=0; j<gridW; j++) mazeGrid[i][j] = 1; 
+            }
+            function carve(r, c) {
+                mazeGrid[r][c] = 0;
+                const dirs = [[-1,0],[1,0],[0,-1],[0,1]].sort(() => Math.random() - 0.5);
+                for(let [dr, dc] of dirs) {
+                    let nr = r + dr*2, nc = c + dc*2;
+                    if(nr > 0 && nr < gridH-1 && nc > 0 && nc < gridW-1 && mazeGrid[nr][nc] === 1) {
+                        mazeGrid[r+dr][c+dc] = 0; 
+                        carve(nr, nc);
+                    }
+                }
+            }
+            carve(1, 1);
+            const midX = Math.floor(gridW/2);
+            mazeGrid[gridH-1][midX] = 0; mazeGrid[gridH-2][midX] = 0; // 입구
+        }
+
+        function addWallBox(x, z, w, d) {
+            const geo = new THREE.BoxGeometry(w, CFG.wallHeight, d);
+            const mesh = new THREE.Mesh(geo, matWall);
+            const uvs = geo.attributes.uv;
+            for(let i=0; i<uvs.count; i++) {
+                let u = uvs.getX(i);
+                if (Math.abs(geo.attributes.normal.getX(i)) > 0.5) uvs.setX(i, u * d/5);
+                else if (Math.abs(geo.attributes.normal.getZ(i)) > 0.5) uvs.setX(i, u * w/5);
+            }
+            mesh.position.set(x, CFG.wallHeight/2, z); 
+            scene.add(mesh);
+            walls.push(new THREE.Box3().setFromObject(mesh));
+        }
+
+        function addCeilLight(x, y, z) {
+            const fix = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.1, 1.2), new THREE.MeshBasicMaterial({color: 0xffffff}));
+            fix.position.set(x, y, z); scene.add(fix);
+            // 밝고 넓은 전등 (그림자 연산 제거로 최적화)
+            const light = new THREE.PointLight(0xffebd6, 3.5, 40); 
+            light.position.set(x, y-0.3, z); 
+            scene.add(light);
+            mapLights.push({ fix, light });
+        }
+
+        function addLargeDesk(x, z, rotationY, hasKey) {
+            const group = new THREE.Group();
+            const w = 5.0, h = 3.0, d = 2.5; 
+            
+            const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matWood);
+            body.position.set(0, h/2, 0); group.add(body);
+            walls.push(new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(x, h/2, z), new THREE.Vector3(w, h, d)));
+
+            const slide = new THREE.Group();
+            const face = new THREE.Mesh(new THREE.BoxGeometry(w*0.9, h*0.4, 0.1), matWood); face.position.set(0,0,d/2 + 0.05); slide.add(face);
+            const knob = new THREE.Mesh(new THREE.SphereGeometry(0.2), matMetal); knob.position.set(0,0,d/2 + 0.25); slide.add(knob);
+            slide.position.set(0, h*0.7, 0); group.add(slide);
+
+            group.position.set(x, 0, z); group.rotation.y = rotationY; scene.add(group);
+            const hit = new THREE.Mesh(new THREE.BoxGeometry(w+1.5, h+1.5, d+2.5), new THREE.MeshBasicMaterial({visible:false}));
+            hit.position.copy(group.position); hit.position.y = h/2; scene.add(hit);
+
+            interactables.push({ type: 'desk', mesh: hit, slideObj: slide, isOpen: false, hasKey: hasKey, faceDir: new THREE.Vector3(0,0,1).applyAxisAngle(new THREE.Vector3(0,1,0), rotationY) });
+        }
+
+        function addWardrobe(x, z, rotationY) {
+            const group = new THREE.Group();
+            const w = 4.0, h = 7.5, d = 2.5;
+            const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matWood);
+            body.position.set(0, h/2, 0); group.add(body);
+            walls.push(new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(x, h/2, z), new THREE.Vector3(w, h, d)));
+            
+            // 양문형 디테일 및 손잡이
+            const line = new THREE.Mesh(new THREE.BoxGeometry(0.05, h, 0.05), new THREE.MeshBasicMaterial({color:0x111111}));
+            line.position.set(0, h/2, d/2); group.add(line);
+            const knob1 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.8), matMetal); knob1.position.set(0.3, h/2, d/2+0.1); group.add(knob1);
+            const knob2 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.8), matMetal); knob2.position.set(-0.3, h/2, d/2+0.1); group.add(knob2);
+
+            group.position.set(x, 0, z); group.rotation.y = rotationY; scene.add(group);
+
+            const hit = new THREE.Mesh(new THREE.BoxGeometry(w+2, h, d+3), new THREE.MeshBasicMaterial({visible:false}));
+            hit.position.copy(group.position); scene.add(hit);
+            
+            // 숨을 때 바라볼 밖의 방향
+            const lookDir = new THREE.Vector3(0,0,1).applyAxisAngle(new THREE.Vector3(0,1,0), rotationY);
+            interactables.push({ type: 'wardrobe', mesh: hit, hidePos: new THREE.Vector3(x, h/2, z), lookDir: lookDir });
+        }
+
+        function buildMapFromGrid() {
+            const offsetX = -Math.floor(gridW/2) * CFG.cellSize;
+            const offsetZ = -gridH * CFG.cellSize; 
+
+            const mw = gridW * CFG.cellSize + CFG.cellSize*2; 
+            const md = gridH * CFG.cellSize + CFG.cellSize*2;
+            const mFloor = new THREE.Mesh(new THREE.BoxGeometry(mw, 1, md), matFloor);
+            mFloor.position.set(0, -0.5, offsetZ + md/2 - CFG.cellSize); scene.add(mFloor);
+            const mCeil = new THREE.Mesh(new THREE.PlaneGeometry(mw, md), matCeil);
+            mCeil.rotation.x = Math.PI/2; mCeil.position.set(0, CFG.wallHeight, offsetZ + md/2 - CFG.cellSize); scene.add(mCeil);
+
+            // 테두리 벽 완벽 차단
+            addWallBox(0, offsetZ - CFG.cellSize/2, mw, CFG.cellSize); // Top
+            
+            // Bottom (미로 테두리 하단 벽) -> 이 부분을 둘로 나누어 가운데(계단 입구)를 확실하게 뚫어줍니다.
+            const gapW = 16; // 입구 너비
+            const sideW = (mw - gapW) / 2;
+            addWallBox(-gapW/2 - sideW/2, offsetZ + md - CFG.cellSize*1.5, sideW, CFG.cellSize); // 입구 왼쪽 벽
+            addWallBox(gapW/2 + sideW/2, offsetZ + md - CFG.cellSize*1.5, sideW, CFG.cellSize);  // 입구 오른쪽 벽
+
+            addWallBox(offsetX - CFG.cellSize/2, offsetZ + md/2 - CFG.cellSize, CFG.cellSize, md); // Left
+            addWallBox(offsetX + mw - CFG.cellSize*1.5, offsetZ + md/2 - CFG.cellSize, CFG.cellSize, md); // Right
+
+            let spawnPoints = [];
+
+            for(let z=0; z<gridH; z++) {
+                for(let x=0; x<gridW; x++) {
+                    const px = offsetX + x * CFG.cellSize;
+                    const pz = offsetZ + z * CFG.cellSize + (CFG.cellSize/2); 
+
+                    if(mazeGrid[z][x] === 1) {
+                        addWallBox(px, pz, CFG.cellSize, CFG.cellSize);
+                    } else {
+                        if(x%3 === 1 && z%3 === 1) addCeilLight(px, CFG.wallHeight - 0.2, pz);
+
+                        let wallsAround = 0; let openDir = null;
+                        if(z>0 && mazeGrid[z-1][x]===1) wallsAround++; else openDir = 0;
+                        if(z<gridH-1 && mazeGrid[z+1][x]===1) wallsAround++; else openDir = 1;
+                        if(x<gridW-1 && mazeGrid[z][x+1]===1) wallsAround++; else openDir = 2;
+                        if(x>0 && mazeGrid[z][x-1]===1) wallsAround++; else openDir = 3;
+
+                        if(wallsAround >= 3 && z < gridH - 2) spawnPoints.push({x: px, z: pz, openDir: openDir});
+                    }
+                }
+            }
+
+            spawnPoints = spawnPoints.sort(() => Math.random() - 0.5);
+            let keyCount = 0;
+            let placedItems = [];
+            const MIN_DIST = 15.0; // 최소 거리 설정 (가구들이 다닥다닥 붙지 않도록)
+
+            spawnPoints.forEach((sp) => {
+                let isKeyRequired = keyCount < CFG.reqKeys;
+                
+                // 이미 배치된 가구들과의 거리를 계산하여 너무 가까우면 패스 (단, 열쇠 배치가 급하면 예외)
+                let tooClose = placedItems.some(pos => Math.hypot(pos.x - sp.x, pos.z - sp.z) < MIN_DIST);
+                if (tooClose && !isKeyRequired) return;
+
+                // 최대 배치 개수를 15개에서 40개로 대폭 증가
+                if (placedItems.length >= 40 && !isKeyRequired) return;
+
+                placedItems.push({x: sp.x, z: sp.z});
+
+                let rotY = 0;
+                if(sp.openDir === 0) rotY = 0; else if(sp.openDir === 1) rotY = Math.PI; else if(sp.openDir === 2) rotY = Math.PI/2; else if(sp.openDir === 3) rotY = -Math.PI/2;
+                
+                const shift = (CFG.cellSize/2) - 1.3; 
+                let px = sp.x, pz = sp.z;
+                if(sp.openDir === 0) pz += shift; else if(sp.openDir === 1) pz -= shift; else if(sp.openDir === 2) px -= shift; else if(sp.openDir === 3) px += shift;
+
+                // 홀/짝수에 따라 서랍과 옷장을 번갈아가며 생성
+                if(placedItems.length % 2 === 1) {
+                    let hasKey = keyCount < CFG.reqKeys;
+                    if(hasKey) keyCount++;
+                    addLargeDesk(px, pz, rotY, hasKey);
+                } else {
+                    addWardrobe(px, pz, rotY);
+                }
+            });
+
+            // Start Area
+            const stairStartZ = 0; const stairEndZ = 20; const startY = 10;
+            const sfMesh = new THREE.Mesh(new THREE.BoxGeometry(16, 1, 16), matFloor);
+            sfMesh.position.set(0, startY - 0.5, stairEndZ + 8); scene.add(sfMesh);
+            
+            escapeDoor = new THREE.Mesh(new THREE.BoxGeometry(8, 9, 1.0), matMetal);
+            escapeDoor.position.set(0, startY + 4.5, stairEndZ + 15.5); scene.add(escapeDoor);
+            walls.push(new THREE.Box3().setFromObject(escapeDoor));
+            interactables.push({ type: 'door', mesh: escapeDoor });
+            
+            addWallBox(0, stairEndZ + 16, 16, 1); addWallBox(-8, stairEndZ + 8, 1, 16); addWallBox(8, stairEndZ + 8, 1, 16);
+
+            // Mathematical stairs geometry
+            const stairGroup = new THREE.Group();
+            const stepCount = 40; const stepH = startY / stepCount; const stepD = (stairEndZ - stairStartZ) / stepCount;
+            for(let i=0; i<stepCount; i++) {
+                const step = new THREE.Mesh(new THREE.BoxGeometry(12, stepH, stepD), matFloor);
+                step.position.set(0, startY - (i*stepH) - stepH/2, stairEndZ - (i*stepD) - stepD/2); stairGroup.add(step);
+            }
+            scene.add(stairGroup);
+            addWallBox(-6.5, (stairEndZ+stairStartZ)/2, 1, stairEndZ-stairStartZ); addWallBox(6.5, (stairEndZ+stairStartZ)/2, 1, stairEndZ-stairStartZ);
+            
+            addCeilLight(0, CFG.wallHeight + startY - 0.2, stairEndZ + 8);
+
+            camera.position.set(0, startY + CFG.playerHeight, stairEndZ + 8);
+            camera.lookAt(0, startY + CFG.playerHeight, 0);
+        }
+
+        function createMonster() {
+            monster = new THREE.Group();
+            
+            const matPale = new THREE.MeshStandardMaterial({color: 0xdcdcdc, roughness: 0.7}); // 창백한 피부
+            const matDark = new THREE.MeshStandardMaterial({color: 0x111111, roughness: 0.9}); // 어두운 신체
+            const matRed = new THREE.MeshBasicMaterial({color: 0xff0000});
+            
+            // 몸통 (길고 마름)
+            const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.6, 5, 16), matDark);
+            torso.position.y = 5.0;
+            monster.add(torso);
+            
+            // 얼굴 (사진 기반: 푹 패인 눈가, 흰 눈동자, 기괴한 입)
+            const headGroup = new THREE.Group();
+            const head = new THREE.Mesh(new THREE.SphereGeometry(1.0, 32, 32), matPale);
+            head.scale.y = 1.4; // 길쭉한 얼굴
+            headGroup.add(head);
+            
+            const sockGeo = new THREE.SphereGeometry(0.3, 16, 16);
+            const eyeGeo = new THREE.SphereGeometry(0.15, 16, 16);
+            const matWhite = new THREE.MeshBasicMaterial({color: 0xffffff});
+            
+            // 검은 눈가
+            const lSock = new THREE.Mesh(sockGeo, matDark); lSock.position.set(0.4, 0.3, 0.85); headGroup.add(lSock);
+            const rSock = new THREE.Mesh(sockGeo, matDark); rSock.position.set(-0.4, 0.3, 0.85); headGroup.add(rSock);
+            // 하얀 눈동자
+            const lEye = new THREE.Mesh(eyeGeo, matWhite); lEye.position.set(0.4, 0.3, 1.05); headGroup.add(lEye);
+            const rEye = new THREE.Mesh(eyeGeo, matWhite); rEye.position.set(-0.4, 0.3, 1.05); headGroup.add(rEye);
+            
+            // 거대하고 기괴한 입과 누런 이빨
+            const mouth = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.5), new THREE.MeshBasicMaterial({color: 0x220000}));
+            mouth.position.set(0, -0.6, 0.9);
+            headGroup.add(mouth);
+            
+            const teethMat = new THREE.MeshBasicMaterial({color: 0xcccc00}); // 누런 이빨
+            for(let i=0; i<6; i++){
+                let t1 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.25, 0.1), teethMat);
+                t1.position.set(-0.4 + i*0.16, 0.25, 0.25); mouth.add(t1);
+                let t2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.25, 0.1), teethMat);
+                t2.position.set(-0.4 + i*0.16, -0.25, 0.25); mouth.add(t2);
+            }
+            
+            headGroup.position.y = 8.0; // 8미터의 엄청난 키
+            monster.add(headGroup);
+            
+            // 팔다리 설정 (뛰는 애니메이션용)
+            const limbGeo = new THREE.CylinderGeometry(0.25, 0.15, 4.5, 8);
+            monster.userData.lArm = new THREE.Mesh(limbGeo, matPale); monster.userData.lArm.position.set(1.2, 5.5, 0); monster.add(monster.userData.lArm);
+            monster.userData.rArm = new THREE.Mesh(limbGeo, matPale); monster.userData.rArm.position.set(-1.2, 5.5, 0); monster.add(monster.userData.rArm);
+            monster.userData.lLeg = new THREE.Mesh(limbGeo, matDark); monster.userData.lLeg.position.set(0.5, 2.0, 0); monster.add(monster.userData.lLeg);
+            monster.userData.rLeg = new THREE.Mesh(limbGeo, matDark); monster.userData.rLeg.position.set(-0.5, 2.0, 0); monster.add(monster.userData.rLeg);
+
+            // 괴물 주변을 감싸는 붉은 오라(조명)
+            const redAura = new THREE.PointLight(0xff0000, 3.0, 25);
+            redAura.position.y = 5.0;
+            monster.add(redAura);
+
+            monster.position.set(0, 0, -60); scene.add(monster);
+        }
+
+        function startGame() {
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('ui-layer').style.display = 'block';
+            controls.lock(); state.running = true; prevTime = performance.now();
+        }
+
+        function showMsg(text) {
+            const el = document.getElementById('message-toast');
+            el.innerText = text; el.style.opacity = 1;
+            setTimeout(() => el.style.opacity = 0, 2500);
+        }
+
+        const interactRaycaster = new THREE.Raycaster();
+        let targetInteract = null;
+
+        function updateInteractions() {
+            if(state.hiding) return;
+            interactRaycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+            const intersects = interactRaycaster.intersectObjects(interactables.map(i => i.mesh));
+            const prompt = document.getElementById('interaction-prompt');
+            
+            if(intersects.length > 0 && intersects[0].distance < 8.0) {
+                targetInteract = interactables.find(i => i.mesh === intersects[0].object);
+                prompt.style.display = 'flex';
+                let desc = '';
+                if(targetInteract.type === 'desk') desc = targetInteract.isOpen ? '열림' : '서랍 열기';
+                else if(targetInteract.type === 'wardrobe') desc = '옷장 숨기';
+                else if(targetInteract.type === 'door') desc = state.keys >= CFG.reqKeys ? '탈출하기' : `열쇠 필요 (${state.keys}/4)`;
+                document.getElementById('prompt-desc').innerText = desc;
+            } else {
+                targetInteract = null; prompt.style.display = 'none';
+            }
+        }
+
+        let preHidePos = new THREE.Vector3();
+        function executeInteraction() {
+            if(state.hiding) {
+                state.hiding = false;
+                camera.position.copy(preHidePos);
+                document.getElementById('hiding-overlay').style.display = 'none';
+                document.getElementById('interaction-prompt').style.display = 'none';
+                return;
+            }
+            if(!targetInteract) return;
+
+            if(targetInteract.type === 'desk' && !targetInteract.isOpen) {
+                targetInteract.isOpen = true;
+                activeAnimations.push({ obj: targetInteract.slideObj, dir: targetInteract.faceDir, distTraveled: 0, maxDist: 2.0, speed: 3.5 });
+                if(targetInteract.hasKey) { state.keys++; document.getElementById('keys-count').innerText = state.keys; showMsg('열쇠 획득!'); }
+                else showMsg('빈 서랍입니다.');
+            } else if(targetInteract.type === 'wardrobe') {
+                state.hiding = true;
+                preHidePos.copy(camera.position);
+                camera.position.copy(targetInteract.hidePos);
+                
+                const targetLook = targetInteract.hidePos.clone().add(targetInteract.lookDir);
+                camera.lookAt(targetLook);
+                
+                document.getElementById('hiding-overlay').style.display = 'block';
+                document.getElementById('interaction-prompt').style.display = 'flex';
+                document.getElementById('prompt-desc').innerText = '나가기';
+            } else if(targetInteract.type === 'door') {
+                if(state.keys >= CFG.reqKeys) endGame('win'); else showMsg('아직 열쇠가 부족합니다.');
+            }
+        }
+
+        function getGroundY(z) {
+            const stairStartZ = 0; const stairEndZ = 20; const startY = 10;
+            if(z >= stairEndZ) return startY; 
+            if(z > stairStartZ && z < stairEndZ) return ((z - stairStartZ) / (stairEndZ - stairStartZ)) * startY;
+            return 0; 
+        }
+
+        // 강력한 축 분리 미끄러짐(Sliding) 충돌 엔진
+        function applySlidingCollision(entityPos, moveAmt, radius, height) {
+            let startX = entityPos.x;
+            entityPos.x += moveAmt.x;
+            let boxX = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(entityPos.x, entityPos.y - height/2, entityPos.z), new THREE.Vector3(radius*2, height, radius*2));
+            if(walls.some(w => w.intersectsBox(boxX))) entityPos.x = startX; 
+            
+            let startZ = entityPos.z;
+            entityPos.z += moveAmt.z;
+            let boxZ = new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(entityPos.x, entityPos.y - height/2, entityPos.z), new THREE.Vector3(radius*2, height, radius*2));
+            if(walls.some(w => w.intersectsBox(boxZ))) entityPos.z = startZ;
+        }
+
+        function onKeyDown(e) {
+            if(!state.running) return;
+            switch(e.code) {
+                case 'KeyW': moveInput.w = true; break; case 'KeyA': moveInput.a = true; break; case 'KeyS': moveInput.s = true; break; case 'KeyD': moveInput.d = true; break;
+                case 'ShiftLeft': moveInput.shift = true; break;
+                case 'KeyF': 
+                    state.flashlightOn = !state.flashlightOn;
+                    // ACESFilmic 톤 매핑 환경에 맞춰 손전등 밝기를 훨씬 강력하게 설정 (5.0)
+                    if(!state.isBlackout || state.flashlightOn) state.flashlight.intensity = state.flashlightOn ? 5.0 : 0;
+                    break;
+                case 'KeyE': executeInteraction(); break;
+            }
+        }
+        function onKeyUp(e) {
+            switch(e.code) { case 'KeyW': moveInput.w = false; break; case 'KeyA': moveInput.a = false; break; case 'KeyS': moveInput.s = false; break; case 'KeyD': moveInput.d = false; break; case 'ShiftLeft': moveInput.shift = false; break; }
+        }
+        function onWindowResize() { camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
+
+        function endGame(result) {
+            state.running = false; controls.unlock();
+            document.getElementById('ui-layer').style.display = 'none';
+            if(result === 'lose') {
+                const js = document.getElementById('jump-scare'); js.style.display = 'block';
+                let t=0; const f = setInterval(() => { t++; js.style.opacity = t%2===0?1:0.5; if(t>10){clearInterval(f); js.style.display='none'; document.getElementById('game-over-screen').style.display='flex';} }, 50);
+            } else document.getElementById('win-screen').style.display = 'flex';
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now();
+            const delta = Math.min((time - prevTime) / 1000, 0.1);
+            prevTime = time;
+
+            if (state.running && controls.isLocked) {
+                // 플레이어 로직
+                if(!state.hiding) {
+                    updateInteractions();
+                    const camDir = new THREE.Vector3(); camera.getWorldDirection(camDir); camDir.y = 0; camDir.normalize();
+                    const camRight = new THREE.Vector3().crossVectors(camera.up, camDir).normalize();
+                    let moveDir = new THREE.Vector3(0,0,0);
+                    if(moveInput.w) moveDir.add(camDir); if(moveInput.s) moveDir.sub(camDir); if(moveInput.a) moveDir.add(camRight); if(moveInput.d) moveDir.sub(camRight);
+
+                    const isMoving = moveDir.lengthSq() > 0;
+                    const canSprint = moveInput.shift && isMoving && state.stamina > 0;
+                    
+                    if(canSprint) state.stamina = Math.max(0, state.stamina - 6 * delta); // 오래 달리기
+                    else state.stamina = Math.min(100, state.stamina + 12 * delta);
+                    document.getElementById('stamina-bar').style.width = state.stamina + '%';
+
+                    if(isMoving) {
+                        moveDir.normalize();
+                        const moveAmt = moveDir.multiplyScalar((canSprint ? CFG.sprintSpeed : CFG.walkSpeed) * delta);
+                        applySlidingCollision(camera.position, moveAmt, CFG.playerRadius, CFG.playerHeight);
+                    }
+                    
+                    const targetY = getGroundY(camera.position.z) + CFG.playerHeight;
+                    camera.position.y = targetY + (isMoving ? Math.sin(time * 0.015) * (canSprint ? 0.08 : 0.04) : 0);
+                }
+
+                // 애니메이션 (서랍)
+                for(let i = activeAnimations.length - 1; i >= 0; i--) {
+                    let anim = activeAnimations[i];
+                    const amt = anim.speed * delta; anim.obj.position.addScaledVector(anim.dir, amt); anim.distTraveled += amt;
+                    if(anim.distTraveled >= anim.maxDist) activeAnimations.splice(i, 1);
+                }
+
+                // 정전(블랙아웃) 시스템 + 깜빡임 연출
+                if (!state.isBlackout && time > state.nextBlackout) {
+                    state.isBlackout = true;
+                    // 전등 꺼질 때 파바박 깜빡임 효과
+                    let flickerCount = 0;
+                    let flickerInterval = setInterval(() => {
+                        flickerCount++;
+                        let isOn = flickerCount % 2 === 0;
+                        ambientLight.intensity = isOn ? 0.8 : 0.1;
+                        mapLights.forEach(l => { l.light.intensity = isOn ? 3.5 : 0; });
+                        if(flickerCount > 6) {
+                            clearInterval(flickerInterval);
+                            ambientLight.intensity = 0.2; // 완전 어둠 방지
+                            mapLights.forEach(l => { l.light.intensity = 0; });
+                        }
+                    }, 100);
+                    
+                    setTimeout(() => {
+                        state.isBlackout = false; state.nextBlackout = time + 15000 + Math.random() * 30000;
+                        // 켜질 때 파바박
+                        let flickerCount2 = 0;
+                        let flickerInterval2 = setInterval(() => {
+                            flickerCount2++;
+                            let isOn = flickerCount2 % 2 === 0;
+                            ambientLight.intensity = isOn ? 0.8 : 0.1;
+                            mapLights.forEach(l => { l.light.intensity = isOn ? 3.5 : 0; });
+                            if(flickerCount2 > 6) clearInterval(flickerInterval2);
+                        }, 100);
+                    }, 5000 + Math.random() * 3000);
+                }
+
+                // --- 괴물 AI & 추적 시스템 완벽 개선 ---
+                let inSafeZone = camera.position.z > -2; 
+                const distToPlayer = Math.hypot(monster.position.x - camera.position.x, monster.position.z - camera.position.z);
+                const isSprinting = moveInput.shift && (moveInput.w || moveInput.a || moveInput.s || moveInput.d) && state.stamina > 0 && !state.hiding;
+
+                if(inSafeZone || state.hiding) {
+                    monsterState = 'patrol';
+                    monster.userData.lastSeen = null;
+                } else {
+                    let canSeePlayer = false;
+                    if(distToPlayer < 60) {
+                        // 1. 시야 계산 최적화 (수학적 3D 레이캐스트 - 벽 가림 완벽 판정)
+                        const rayOrigin = monster.position.clone().setY(4);
+                        const rayDir = new THREE.Vector3().subVectors(camera.position, monster.position).normalize();
+                        const ray = new THREE.Ray(rayOrigin, rayDir);
+                        
+                        let hitWall = false;
+                        for(let i=0; i<walls.length; i++) {
+                            let intersectPoint = new THREE.Vector3();
+                            if(ray.intersectBox(walls[i], intersectPoint)) {
+                                if(rayOrigin.distanceTo(intersectPoint) < distToPlayer - 1.5) {
+                                    hitWall = true; break; // 벽에 가로막힘
+                                }
+                            }
+                        }
+                        if(!hitWall) canSeePlayer = true;
+                    }
+                    
+                    // 2. 청각 시스템 (달리면 소리를 듣고 쫓아옴)
+                    let canHearPlayer = isSprinting && distToPlayer < 35;
+
+                    if(canSeePlayer || canHearPlayer) {
+                        monsterState = 'chase';
+                        monster.userData.lastSeen = camera.position.clone(); // 마지막 위치 기억
+                    } else if (monster.userData.lastSeen) {
+                        // 코너를 돌아도 마지막 본 장소까지는 집요하게 수색
+                        monsterState = 'investigate';
+                        const distToLastSeen = Math.hypot(monster.position.x - monster.userData.lastSeen.x, monster.position.z - monster.userData.lastSeen.z);
+                        if(distToLastSeen < 3.0) {
+                            monster.userData.lastSeen = null; // 확인 후 포기
+                            monsterState = 'patrol';
+                        }
+                    } else {
+                        monsterState = 'patrol';
+                    }
+                }
+
+                if(monsterState === 'chase' || monsterState === 'investigate') {
+                    // 미친 듯이 전력 질주하며 쫓아옴 (또는 수색)
+                    let targetPos = monsterState === 'chase' ? camera.position : monster.userData.lastSeen;
+                    monster.lookAt(targetPos.x, monster.position.y, targetPos.z);
+                    const dir = new THREE.Vector3().subVectors(targetPos, monster.position).setY(0).normalize();
+                    
+                    // 수색(Investigate) 모드일 때는 속도를 살짝 낮춤
+                    const currentSpeed = monsterState === 'chase' ? CFG.monsterSpeed : CFG.monsterSpeed * 0.85;
+                    const moveAmt = dir.multiplyScalar(currentSpeed * delta);
+                    
+                    // 괴물도 벽을 뚫지 못하게 물리 엔진(Sliding) 적용!
+                    applySlidingCollision(monster.position, moveAmt, 1.2, 8.0);
+                    
+                    // 전력 질주 애니메이션 (팔다리 크게 흔들기)
+                    const runAnim = time * 0.02;
+                    monster.userData.lArm.rotation.x = Math.sin(runAnim) * 1.5;
+                    monster.userData.rArm.rotation.x = Math.sin(runAnim + Math.PI) * 1.5;
+                    monster.userData.lLeg.rotation.x = Math.sin(runAnim + Math.PI) * 1.2;
+                    monster.userData.rLeg.rotation.x = Math.sin(runAnim) * 1.2;
+                    monster.position.y = Math.abs(Math.sin(runAnim * 2)) * 0.5; // 몸통 반동
+
+                    if(monsterState === 'chase' && distToPlayer < 2.5) endGame('lose'); // 닿으면 무조건 즉사
+
+                } else {
+                    // 순찰 상태
+                    monster.position.y = 0;
+                    if(!monster.userData.target || Math.random() < 0.02) {
+                        monster.userData.target = new THREE.Vector3(monster.position.x + (Math.random()-0.5)*30, 0, monster.position.z + (Math.random()-0.5)*30);
+                    }
+                    if(monster.userData.target) {
+                        const dir = new THREE.Vector3().subVectors(monster.userData.target, monster.position).setY(0);
+                        if(dir.lengthSq() > 2) {
+                            dir.normalize(); monster.lookAt(monster.userData.target);
+                            const moveAmt = dir.multiplyScalar(CFG.walkSpeed * 0.8 * delta);
+                            
+                            let startX = monster.position.x; monster.position.x += moveAmt.x;
+                            if(walls.some(w => w.intersectsBox(new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(monster.position.x, 4, monster.position.z), new THREE.Vector3(2.4, 8, 2.4))))) monster.position.x = startX;
+                            
+                            let startZ = monster.position.z; monster.position.z += moveAmt.z;
+                            if(walls.some(w => w.intersectsBox(new THREE.Box3().setFromCenterAndSize(new THREE.Vector3(monster.position.x, 4, monster.position.z), new THREE.Vector3(2.4, 8, 2.4))))) {
+                                monster.position.z = startZ; monster.userData.target = null; // 벽에 막히면 다른 타겟 찾기
+                            }
+
+                            // 걷기 애니메이션
+                            const walkAnim = time * 0.005;
+                            monster.userData.lArm.rotation.x = Math.sin(walkAnim) * 0.5; monster.userData.rArm.rotation.x = Math.sin(walkAnim + Math.PI) * 0.5;
+                            monster.userData.lLeg.rotation.x = Math.sin(walkAnim + Math.PI) * 0.5; monster.userData.rLeg.rotation.x = Math.sin(walkAnim) * 0.5;
+                        } else monster.userData.target = null;
+                    }
+                }
+
+                // 괴물 접근 시 손전등 미친 듯이 깜빡임 (파라노말 현상)
+                if (state.flashlightOn && !state.hiding && distToPlayer < 40) {
+                    const danger = 1.0 - (distToPlayer / 40);
+                    if (Math.random() < danger) state.flashlight.intensity = Math.random() * 0.5; // 파바박
+                    else state.flashlight.intensity = 2.0 + Math.random() * 1.0; 
+                } else if (state.flashlightOn) {
+                    state.flashlight.intensity = 2.5;
+                }
+            }
+            if(renderer) renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
